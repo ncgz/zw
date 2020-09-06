@@ -1,7 +1,7 @@
 from __future__ import print_function, division
 import scipy
 import tensorflow
-from tensorflow.keras.layers import Input, Dense, Reshape, Flatten, Dropout, Concatenate,Conv3DTranspose,Subtract,Multiply,Lambda,GaussianNoise,SeparableConv1D,AveragePooling3D,Add,MaxPooling3D
+from tensorflow.keras.layers import Input, Dense, Reshape, Flatten, Dropout, Concatenate,Conv3DTranspose,Subtract,Multiply,Lambda,GaussianNoise,SeparableConv1D,AveragePooling3D,Add,MaxPooling3D,GlobalAveragePooling3D
 from tensorflow.keras.layers import BatchNormalization, Activation, ZeroPadding2D
 from tensorflow.keras.layers import LeakyReLU,ReLU
 from tensorflow.keras.layers import UpSampling3D, Conv3D
@@ -23,7 +23,7 @@ class DataLoader():
         self.img_res = img_res
 
     def load_batch(self, batch_size):
-        path = glob('D:/MRIHAR/trainforwgan2/*mat')
+        path = glob('D:/MRIHAR/trainforwgan/*mat')
         random.shuffle(path)
         self.n_batches = int(len(path) / batch_size)
         for i in range(self.n_batches-1):
@@ -50,20 +50,20 @@ class DataLoader():
 
     def load_val_batch(self):
         batch_size = 1
-        path = glob('D:/MRIHAR/testforwgan2/*.mat')
+        path = glob('D:/MRIHAR/testforwgan/*.mat')
         print(path)
         n_batches = 765
         for i in range(n_batches):
             batch = path[i]
-            imgs_A, fss,ses,mas = [], [], [], []
-            img_A, fs, se, ma = self.imread(batch)
+            imgs_A = []
+            img_A= self.imread2(batch)
             img_A = img_A.reshape((80, 96, 80,1))
             imgs_A.append(img_A)
-            fss.append(fs)
-            ses.append(se)
-            mas.append(ma)
+            # fss.append(fs)
+            # ses.append(se)
+            # mas.append(ma)
 
-            yield imgs_A,fss,ses,mas,batch
+            yield imgs_A,batch
 
 
     def imread(self, path):
@@ -74,7 +74,12 @@ class DataLoader():
         ma = k['ma']
 
         return img,fs,se,ma
-#
+
+    def imread2(self, path):
+        k = scio.loadmat(path)
+        img = k['img']
+
+        return img
 
 class HarmonyGan():
 
@@ -89,88 +94,31 @@ class HarmonyGan():
         # Number of filters in the first layer of G and D
         self.gf =8
         self.df =8
-        optimizer_d = RMSprop(lr= 0.00005)
-        optimizer_g = RMSprop(lr= 0.00005)
-    #     optimizer_d = tensorflow.keras.optimizers.Adam(
-    # learning_rate=0.0001,
-    # beta_1=0.9,
-    # beta_2=0.999,
-    # epsilon=1e-07,
-    # amsgrad=False,
-    # name="Adam")
-    #     optimizer_g = tensorflow.keras.optimizers.Adam(
-    #         learning_rate=0.0001,
-    #         beta_1=0.9,
-    #         beta_2=0.999,
-    #         epsilon=1e-07,
-    #         amsgrad=False,
-    #         name="Adam")
-        #学习率请一定一样
-        # Build and compile the discriminator
+        optimizer_d = RMSprop(lr=0.001)
 
         def wasserstein_loss(y_true, y_pred):
-            return K.mean(y_true*y_pred)
-
-        def cos(y_true, y_pred):
-            y1=K.reshape(y_true,(16,614400))
-            y2=K.reshape(y_pred,(16,614400))
-            return -K.mean(K.batch_dot(y1, y2, axes=1) / (K.sqrt(K.batch_dot(y1, y1, axes=1)) * K.sqrt(K.batch_dot(y2, y2, axes=1))))
-
-        def maee(y_true, y_pred):
-            s=K.mean(K.abs(y_true-y_pred))
-            s= K.exp(10*K.abs(s-0.1))
-            return s
-
-        def acc(y_true, y_pred):
-            # Calculates the precision
-            true_positives = 3+K.sum(K.sign(y_true * y_pred))/2
-            #predicted_positives = K.sum(K.round(K.clip(y_pred, -1, 1)))
-            accc = true_positives / 6
-            return accc
+            return K.mean(y_true * y_pred)
 
         self.discriminator = self.build_discriminator()
         self.discriminator.compile(
-            loss=[wasserstein_loss,wasserstein_loss, wasserstein_loss],
-            #loss=['binary_crossentropy','binary_crossentropy','binary_crossentropy','binary_crossentropy','binary_crossentropy'],
-            loss_weights=[1,1,1],
-            optimizer=optimizer_d
-           )
+            loss=[wasserstein_loss, wasserstein_loss, wasserstein_loss],
+            # loss=['binary_crossentropy','binary_crossentropy','binary_crossentropy','binary_crossentropy','binary_crossentropy'],
+            loss_weights=[1, 1, 1],
+            optimizer=optimizer_d)
 
-        #-------------------------
-        # Construct Computational
-        #   Graph of Generator
-        #-------------------------
-
-        # Build the generator
         self.generator = self.build_generator()
-
-        # Input images and their conditioning images
-        img_A = Input(shape=self.img_shape)
-
-        # By conditioning on B generate a fake version of A
-        fake_A= self.generator(img_A)
-
-        # For the combined model we will only train the generator
+        img_B = Input(shape=self.img_shape)
+        fake_A = self.generator(img_B)
         self.discriminator.trainable = False
+        [v1, v2, v3] = self.discriminator([fake_A])
+        self.combined = Model(inputs=[img_B], outputs=[v1, v2, v3])
+        self.combined2 = Model(inputs=[img_B], outputs=[fake_A, fake_A])
+        # img_B = Input(shape=self.img_shape)
+        # fake_A = self.generator(img_B)
+        # self.discriminator.trainable = False
+        # [v1, v2, v3] = self.discriminator([fake_A])
+        # self.combined2 = Model(inputs=[img_B], outputs=[v1, v2, v3, fake_A, fake_A])
 
-        # Discriminators determines validity of translated images / condition pairs
-        [v1,v2,v3]= self.discriminator([fake_A])
-
-        self.combined = Model(inputs=[img_A], outputs=[v1,v2,v3,fake_A,fake_A])
-        self.combined.compile(loss=[wasserstein_loss,wasserstein_loss,wasserstein_loss,'mae',cos],
-        #self.combined.compile(loss=['binary_crossentropy','binary_crossentropy','binary_crossentropy', 'binary_crossentropy','binary_crossentropy', 'mae'],
-        loss_weights=[1,1 , 1, 0,0],
-                              #100000太高
-                              #1000 97 太高
-                              #100 90
-                              #1 太低
-                              #D十次，G一次效果还可以
-                              #D需要dense之前
-                              optimizer=optimizer_g
-                              )
-
-        #mae约为0.21
-        #cos约为0.7~0.8
 
     def build_generator(self):
         """U-Net Generator"""
@@ -182,29 +130,30 @@ class HarmonyGan():
             imgg = tensorflow.convert_to_tensor(imgg, dtype='float32')
             return tensorflow.multiply(x, imgg)
 
-        def conv2d(layer_input, filters, f_size=3):
+        def conv2d(layer_input, filters, f_size=4, bh=1):
             """Layers used during downsampling"""
             d = Conv3D(filters, kernel_size=f_size, strides=1, padding='same')(layer_input)
             # d = InstanceNormalization()(d)
-            d = BatchNormalization()(d)
+            if bh == 1:
+                d = BatchNormalization()(d)
             d = LeakyReLU(alpha=0.2)(d)
             d = Conv3D(filters, kernel_size=f_size, strides=1, padding='same')(d)
             # d = InstanceNormalization()(d)
-            d = BatchNormalization()(d)
+            if bh == 1:
+                d = BatchNormalization()(d)
             d = LeakyReLU(alpha=0.2)(d)
-
 
             return d
 
-        def conv2d2(layer_input, filters, f_size=3):
-            """Layers used during downsampling"""
-            d = Conv3D(filters, kernel_size=f_size, strides=1, padding='same')(layer_input)
-            # d = InstanceNormalization()(d)
-            d = BatchNormalization()(d)
-            d = LeakyReLU(alpha=0.2)(d)
-            return d
+        # def conv2d2(layer_input, filters, f_size=4):
+        #     """Layers used during downsampling"""
+        #     d = Conv3D(filters, kernel_size=f_size, strides=1, padding='same')(layer_input)
+        #     # d = InstanceNormalization()(d)
+        #     d = BatchNormalization()(d)
+        #     d = LeakyReLU(alpha=0.2)(d)
+        #     return d
 
-        def conv2dd(layer_input, filters, f_size=3):
+        def conv2dd(layer_input, filters, f_size=4):
             """Layers used during downsampling"""
             d = Conv3D(filters, kernel_size=f_size, strides=1, padding='same')(layer_input)
             d = LeakyReLU(alpha=0.2)(d)
@@ -212,28 +161,31 @@ class HarmonyGan():
             d = LeakyReLU(alpha=0.2)(d)
             return d
 
-        def deconv2d(layer_input, skip_input, filters, f_size=3, dropout_rate=0):
+        def deconv2d(layer_input, skip_input, filters, f_size=4, dropout_rate=0, bh=1):
             """Layers used during upsampling"""
             u = UpSampling3D(size=2)(layer_input)
             u = Conv3D(filters, kernel_size=f_size, strides=1, padding='same')(u)
-            u = BatchNormalization()(u)
+            if bh == 1:
+                u = BatchNormalization()(u)
             # u = InstanceNormalization()(u)
             u = LeakyReLU(alpha=0.2)(u)
             u = Conv3D(filters, kernel_size=f_size, strides=1, padding='same')(u)
-            u = BatchNormalization()(u)
+            if bh == 1:
+                u = BatchNormalization()(u)
             # u = InstanceNormalization()(u)
             u = LeakyReLU(alpha=0.2)(u)
             u = Concatenate()([u, skip_input])
             u = Conv3D(filters, kernel_size=f_size, strides=1, padding='same')(u)
-            u = BatchNormalization()(u)
+            if bh == 1:
+                u = BatchNormalization()(u)
             # u = InstanceNormalization()(u)
             u = LeakyReLU(alpha=0.2)(u)
             u = Conv3D(filters, kernel_size=f_size, strides=1, padding='same')(u)
-            u = BatchNormalization()(u)
+            if bh == 1:
+                u = BatchNormalization()(u)
             # u = InstanceNormalization()(u)
             u = LeakyReLU(alpha=0.2)(u)
             return u
-
 
         # Image input
         d0 = Input(shape=self.img_shape)
@@ -242,18 +194,18 @@ class HarmonyGan():
         # dd0 = Conv3D(self.gf * 8, kernel_size=1, strides=1, padding='same')(dd0)
         # Downsampling
         d1 = conv2dd(dd0, self.gf)  # 40
-        dd1 = MaxPooling3D(pool_size=(2, 2, 2), strides=None, padding="valid")(d1)
+        dd1 = AveragePooling3D(pool_size=(2, 2, 2), strides=None, padding="valid")(d1)
         d2 = conv2d(dd1, self.gf * 2)  # 20
-        dd2 = MaxPooling3D(pool_size=(2, 2, 2), strides=None, padding="valid")(d2)
+        dd2 = AveragePooling3D(pool_size=(2, 2, 2), strides=None, padding="valid")(d2)
         d3 = conv2d(dd2, self.gf * 4)  # 10
-        dd3 = MaxPooling3D(pool_size=(2, 2, 2), strides=None, padding="valid")(d3)
+        dd3 = AveragePooling3D(pool_size=(2, 2, 2), strides=None, padding="valid")(d3)
         d4 = conv2d(dd3, self.gf * 8)  # 5
-        dd4 = MaxPooling3D(pool_size=(2, 2, 2), strides=None, padding="valid")(d4)
+        dd4 = AveragePooling3D(pool_size=(2, 2, 2), strides=None, padding="valid")(d4)
 
-        dd4= Conv3D(self.gf * 8, kernel_size=3, strides=1, padding='same')(dd4)
+        dd4 = Conv3D(self.gf * 8, kernel_size=4, strides=1, padding='same')(dd4)
         dd4 = BatchNormalization()(dd4)
         dd4 = LeakyReLU(alpha=0.2)(dd4)
-        dd4= Conv3D(self.gf * 8, kernel_size=3, strides=1, padding='same')(dd4)
+        dd4 = Conv3D(self.gf * 8, kernel_size=4, strides=1, padding='same')(dd4)
         dd4 = BatchNormalization()(dd4)
         dd4 = LeakyReLU(alpha=0.2)(dd4)
         # Upsampling
@@ -261,8 +213,10 @@ class HarmonyGan():
         u3 = deconv2d(u2, d3, self.gf * 4)
         u4 = deconv2d(u3, d2, self.gf * 2)
         u5 = deconv2d(u4, d1, self.gf)
-        u5 =Concatenate()([u5, d0])
+        # u5 =Concatenate()([u5, d0])
         output_img = Conv3D(1, kernel_size=1, strides=1, padding='same')(u5)
+        output_img = Add()([d0, output_img])
+        # 诀窍在于这个ADD
         output_img = Lambda(mul, output_shape=(80, 96, 80, 1))(output_img)
         # #output_img2=Subtract()([d0,output_img])
         # output_img2=Lambda(mul, output_shape=(80,96,80, 1))(output_img)
@@ -272,26 +226,29 @@ class HarmonyGan():
 
     def build_discriminator(self):
 
-        def d_layer(layer_input, filters, f_size=3):
+        def d_layer(layer_input, filters, f_size=4, bh=1):
             """Discriminator layer"""
             d = Conv3D(filters, kernel_size=f_size, strides=1, padding='same')(layer_input)
-            d = BatchNormalization()(d)
+
+            if bh == 1:
+                d = BatchNormalization()(d)
             # d = InstanceNormalization()(d)
             d = LeakyReLU(alpha=0.2)(d)
             d = Conv3D(filters, kernel_size=f_size, strides=1, padding='same')(d)
-            d = BatchNormalization()(d)
+            if bh == 1:
+                d = BatchNormalization()(d)
             # d = InstanceNormalization()(d)
             d = LeakyReLU(alpha=0.2)(d)
-            d = MaxPooling3D(pool_size=(2, 2, 2), strides=None, padding="valid")(d)
+            d = AveragePooling3D(pool_size=(2, 2, 2), strides=None, padding="valid")(d)
             return d
 
-        def d_layerr(layer_input, filters, f_size=3):
+        def d_layerr(layer_input, filters, f_size=4):
             """Discriminator layer"""
             d = Conv3D(filters, kernel_size=f_size, strides=1, padding='same')(layer_input)
             d = LeakyReLU(alpha=0.2)(d)
             d = Conv3D(filters, kernel_size=f_size, strides=1, padding='same')(d)
             d = LeakyReLU(alpha=0.2)(d)
-            d = MaxPooling3D(pool_size=(2, 2, 2), strides=None, padding="valid")(d)
+            d = AveragePooling3D(pool_size=(2, 2, 2), strides=None, padding="valid")(d)
             return d
 
         img_A = Input(shape=self.img_shape)
@@ -302,39 +259,67 @@ class HarmonyGan():
         d2 = d_layer(d1, self.df * 2)
         d3 = d_layer(d2, self.df * 4)
         d4 = d_layer(d3, self.df * 8)
-        q=Flatten()(d4)
-        q = Dense(256)(q)
-        # q=LeakyReLU(alpha=0.2)(q)
+        # q=GlobalAveragePooling3D()(d4)
+        q = Flatten()(d4)
+        q = Dense(512)(q)
+        q=LeakyReLU(alpha=0.2)(q)
         # v1 = Dense(1,activation='sigmoid')(q)
-        #q = Conv3D(1, kernel_size=1, strides=1, padding='same')(d4)
-        #q=LeakyReLU(alpha=0.2)(q)
-        #q = BatchNormalization()(q)
-        # q = Flatten()(d4)
-        # q = Dense(1024)(q)
+        # q = Conv3D(1, kernel_size=1, strides=1, padding='same')(d4)
         # q=LeakyReLU(alpha=0.2)(q)
+        q = BatchNormalization()(q)
+
+        # q = Dense(1024)(q)
+        #q = LeakyReLU(alpha=0.2)(q)
         # q = BatchNormalization()(q)
         v1 = Dense(1)(q)
-        #v1=ReLU(max_value=1)(v1)
+        # v1=ReLU(max_value=1)(v1)
         v2 = Dense(1)(q)
-        #v2=ReLU(max_value=1)(v2)
+        # v2=ReLU(max_value=1)(v2)
         v3 = Dense(1)(q)
-        #v4 = Dense(1)(q)
-        #v3=ReLU(max_value=1)(v3)
-        #v5 = ReLU(max_value=1)(v5)
-        #v4 = Dense(3, activation='softmax')(q)
-        Model(img_A, [v1,v2,v3]).summary()
-        return Model(img_A, [v1,v2,v3])
+        # v4 = Dense(1)(q)
+        # v3=ReLU(max_value=1)(v3)
+        # v5 = ReLU(max_value=1)(v5)
+        # v4 = Dense(3, activation='softmax')(q)
+        Model(img_A, [v1, v2, v3]).summary()
+        return Model(img_A, [v1, v2, v3])
 
     def train(self, epochs, batch_size, sample_interval=50):
         def wasserstein_loss(y_true, y_pred):
-            return K.mean(y_true*y_pred)
+            return K.mean(y_true * y_pred)
 
         def cos(y_true, y_pred):
-            y1=K.reshape(y_true,(batch_size,614400))
-            y2=K.reshape(y_pred,(batch_size,614400))
-            return -K.mean(K.batch_dot(y1, y2, axes=1) / (K.sqrt(K.batch_dot(y1, y1, axes=1)) * K.sqrt(K.batch_dot(y2, y2, axes=1))))
+            y1 = K.reshape(y_true, (batch_size, 614400))
+            y2 = K.reshape(y_pred, (batch_size, 614400))
+            q= K.mean(K.batch_dot(y1, y2, axes=1) / (K.sqrt(K.batch_dot(y1, y1, axes=1)) * K.sqrt(K.batch_dot(y2, y2, axes=1))))
+            return -q
+            #return 0.5 * (0.7 - q) + 0.5 * K.abs(q - 0.7)
+            #return -K.mean(K.batch_dot(y1, y2, axes=1) / (K.sqrt(K.batch_dot(y1, y1, axes=1)) * K.sqrt(K.batch_dot(y2, y2, axes=1))))
+
+        def maee(y_true, y_pred):
+            y1 = K.reshape(y_true, (batch_size, 614400))
+            y2 = K.reshape(y_pred, (batch_size, 614400))
+            q = K.mean(K.mean(K.abs(y1 - y2), axis=1))
+            #return 0.5 * (q - 0.3) + 0.5 * K.abs(q - 0.3)
+            return q
+
+
+        optimizer_g = RMSprop(lr=0.001)
+        optimizer_g2 = RMSprop(lr=0.001)
+        #0.001是否会导致GD的及时，D1,D2，G应该同步，需要选0.001保证G的跟上
+        self.combined.compile(loss=[wasserstein_loss, wasserstein_loss, wasserstein_loss],
+                              # self.combined.compile(loss=['binary_crossentropy','binary_crossentropy','binary_crossentropy', 'binary_crossentropy','binary_crossentropy', 'mae'],
+                              loss_weights=[1, 1, 1],
+                              #0.1收敛慢但是会收敛，不要只看前几轮。在MAE,COS完全收敛前得到好的结果 0.08收敛到0.98mean
+                              #loss weight决定图像保真，lr决定D1D2G的loss同步
+                              optimizer=optimizer_g)
+        self.combined2.compile(loss=[maee, cos],
+                              # self.combined.compile(loss=['binary_crossentropy','binary_crossentropy','binary_crossentropy', 'binary_crossentropy','binary_crossentropy', 'mae'],
+                              loss_weights=[1, 1],
+                              # 0.1收敛慢但是会收敛，不要只看前几轮。在MAE,COS完全收敛前得到好的结果 0.08收敛到0.98mean
+                              # loss weight决定图像保真，lr决定D1D2G的loss同步
+                              optimizer=optimizer_g2)
         start_time = datetime.datetime.now()
-        optimizer_g = RMSprop(lr=0.00005)
+
         # Adversarial loss ground truths
         #valid =np.concatenate([np.ones((batch_size,1)),np.zeros((batch_size,1))],axis=1)
         #fake = np.concatenate([np.zeros((batch_size,1)),np.ones((batch_size,1))],axis=1)
@@ -353,49 +338,34 @@ class HarmonyGan():
             q1=[]
             q2=[]
             q3=[]
-
+            o=0
             for batch_i,( imgs_A,fs,se,ma) in enumerate(self.data_loader.load_batch(batch_size)):
-
-
                 imgs_A=np.array(imgs_A)
-                # ---------------------
-                #  Train Discriminator
-                # ---------------------
                 fs=np.array(fs)
-                fs=fs*(1-np.random.randn(batch_size)*0.1)
+                fs=fs*(1-np.random.randn(batch_size,1)*0.1)
                 se = np.array(se)
-                se=se*(1-np.random.randn(batch_size)*0.1)
+                se=se*(1-np.random.randn(batch_size,1)*0.1)
                 ma = np.array(ma)
-                ma=ma*(1-np.random.randn(batch_size)*0.1)
-                # fs2 = -np.ones((batch_size, 1))
-                # fs2=fs2*(1-np.random.randn(batch_size)*0.1)
-                # se2 = -np.ones((batch_size, 1))
-                # se2=se2*(1-np.random.randn(batch_size)*0.1)
-                # ma2 = -np.ones((batch_size, 1))
-                # ma2=ma2*(1-np.random.randn(batch_size)*0.1)
+                ma = ma * (1 - np.random.randn(batch_size,1) * 0.1)
+                fs2 = -np.ones((batch_size, 1))* (1 - np.random.randn(batch_size,1) * 0.1)
+                se2 = -np.ones((batch_size, 1))* (1 - np.random.randn(batch_size,1) * 0.1)
+                ma2 = -np.ones((batch_size, 1))* (1 - np.random.randn(batch_size,1) * 0.1)
 
-
-                # Condition on B and generate a translated version
                 fake_A = self.generator.predict(imgs_A)
-                # Train the discriminators (original images = real / generated = Fake)
+                pinimg = np.concatenate((imgs_A, fake_A), axis=0)
+                # # pinva = np.concatenate((valid, fake), axis=0)
+                pinfs = np.concatenate((fs, fs), axis=0)
+                pinse = np.concatenate((se, se), axis=0)
+                pinma = np.concatenate((ma, ma), axis=0)
 
-                d_loss= self.discriminator.train_on_batch(imgs_A, [fs, se, ma])
+                # print(np.shape(pinimg))
+                # print(np.shape(pinva))
+                d_loss1 = self.discriminator.train_on_batch(pinimg, [pinfs, pinse, pinma])
+                # d_loss1 = self.discriminator.train_on_batch(imgs_A, [fs, se, ma])
+                # d_loss2 = self.discriminator.train_on_batch(fake_A, [fs, se, ma])
 
-                # d_loss_real = self.discriminator.train_on_batch(imgs_A, [valid,fs, se, ma])
-                # d_loss_fake = self.discriminator.train_on_batch(fake_A, [fake,fs, se, ma])
-                # #d_loss_real = self.discriminator.train_on_batch(imgs_A, [fs, se, ma])
-                # d_loss = 0.5 * np.add(d_loss_real, d_loss_fake)
-
-                # pinimg = np.concatenate((imgs_A, fake_A), axis=0)
-                # #pinva = np.concatenate((valid, fake), axis=0)
-                # pinfs = np.concatenate((fs, fs), axis=0)
-                # pinse = np.concatenate((se, se), axis=0)
-                # pinma = np.concatenate((ma, ma), axis=0)
-
-                #print(np.shape(pinimg))
-                #print(np.shape(pinva))
-
-                #d_loss = self.discriminator.train_on_batch(pinimg, [pinfs,pinse,pinma])
+                #d_loss1 = self.discriminator.train_on_batch(imgs_A, [fs, se, ma])
+                #d_loss2 = self.discriminator.train_on_batch(fake_A, [fs, se, ma])
                 # -----------------
                 #  Train Generator
                 # -----------------
@@ -404,30 +374,32 @@ class HarmonyGan():
                     weights = [np.clip(w, -0.1, 0.1) for w in weights]
                     l.set_weights(weights)
                 # Train the generators
-                q1.append(d_loss)
-
-                g_loss = self.combined.train_on_batch(imgs_A, [-fs, -se, -ma, imgs_A, imgs_A])
-                m=m+np.abs(g_loss[1]+g_loss[2]+g_loss[3])
-                # q=q+1
-                # if q==5:
-                #     q=0
-                #     g_loss = self.combined.train_on_batch(imgs_A, [-fs,-se,-ma,imgs_A,imgs_A])
-                # else:
-                #     g_loss=np.zeros((6))
-
-                    #g_loss = self.combined.train_on_batch(imgs_A, [ mloss2])
+                q1.append(d_loss1)
+                #q2.append(d_loss2)
+                #g_loss = self.combined.train_on_batch(imgs_A, [fs2, se2, ma2, imgs_A, imgs_A])
+                o=o+1
+                if o==5:
+                    o=0
+                    g_loss = self.combined.train_on_batch(imgs_A, [fs2, se2, ma2])
+                    g_loss2 = self.combined2.train_on_batch(imgs_A, [imgs_A, imgs_A])
+                else:
+                    g_loss = np.zeros((6))
+                    g_loss2 = np.zeros((6))
                 q2.append(g_loss)
+                q3.append(g_loss2)
                 #q4.append(100 * d_loss[8])
                 elapsed_time = datetime.datetime.now() - start_time
                 # Plot the progress
                 print(
-                    "[Epoch %d/%d] [Batch %d/%d]\n [D loss:%f,fs:%f,se:%f,ma:%f]\n[G loss1:%f,fs:%f,se:%f,ma:%f,mae:%f,cos:%f] time: %s" % (
-                    epoch, epochs,
-                    batch_i, self.data_loader.n_batches,
-                    d_loss[0],d_loss[1],d_loss[2],d_loss[3],
-                    #d_loss_fake[0], d_loss_fake[1], d_loss_fake[2], d_loss_fake[3],d_loss_fake[4],
-                    g_loss[0],g_loss[1], g_loss[2], g_loss[3], g_loss[4],g_loss[5],
-                    elapsed_time))
+                    "[Epoch %d/%d] [Batch %d/%d]\n[D loss real:%f,fs:%f,se:%f,ma:%f]\n[G loss1:%f,fs:%f,se:%f,ma:%f]\n[G loss2:%f,mae:%f,cos:%f] time: %s" % (
+                        epoch, epochs,
+                        batch_i, self.data_loader.n_batches,
+                        d_loss1[0], d_loss1[1], d_loss1[2], d_loss1[3],
+                        #d_loss2[0], d_loss2[1], d_loss2[2], d_loss2[3],
+                        # d_loss_fake[0], d_loss_fake[1], d_loss_fake[2], d_loss_fake[3],d_loss_fake[4],
+                        g_loss[0], g_loss[1], g_loss[2], g_loss[3],
+                        g_loss2[0], g_loss2[1], g_loss2[2],
+                        elapsed_time))
                 #print ("[Epoch %d/%d] [Batch %d/%d] [D loss: %f, acc: %3d%%,acc: %3d%%,acc: %3d%%] [G loss: %f,%3d%%,%3d%%,%3d%%,%f] time: %s" % (epoch, epochs,
                                                                         # batch_i, self.data_loader.n_batches,
                                                                         # d_loss[0], 100*d_loss[4],100*d_loss[5],100*d_loss[6],
@@ -450,18 +422,27 @@ class HarmonyGan():
                 # If at save interval => save generated image samples
                 # if batch_i % sample_interval == 0:
                 #     self.sample_images(epoch, batch_i)
-            a1 = 'D:/MRIHAR/model2/dis_epoch' + str(epoch) + '.h5'
-            self.discriminator.save(a1)
+            #a1 = 'D:/MRIHAR/model2/dis_epoch' + str(epoch) + '.h5'
+            #self.discriminator.save(a1)
             a1 = 'D:/MRIHAR/model2/combined_epoch' + str(epoch) + '.h5'
-            self.combined.save(a1)
-            a2= 'D:/MRIHAR/model2/a_epoch'+str(epoch)+'.mat'
-            scipy.io.savemat(a2, {'q1': q1,'q2': q2})
+            self.generator.save(a1)
+            a2 = 'D:/MRIHAR/model2/a_epoch' + str(epoch) + '.mat'
+            scipy.io.savemat(a2, {'q1': q1, 'q2': q2, 'q3': q3})
+            # z1=np.abs((g1-d1)/d1)
+            # z2=np.abs((g2-d2)/d2)
+            # z3 = np.abs((g3 - d3) / d3)
+            # print(z1*z1*z1*z1)
+            # print(z2*z2*z2*z2)
+            # print(z3*z3*z3*z3)
 
-            self.combined.compile(loss=[wasserstein_loss, wasserstein_loss, wasserstein_loss, 'mae', cos],
-                                  # self.combined.compile(loss=['binary_crossentropy','binary_crossentropy','binary_crossentropy', 'binary_crossentropy','binary_crossentropy', 'mae'],
-                                  loss_weights=[1, 1, 1,m/283, m/283],
-                                  optimizer=optimizer_g
-                                  )
+
+            # self.combined.compile(loss=[wasserstein_loss, wasserstein_loss, wasserstein_loss, maee, cos],
+            #                       # self.combined.compile(loss=['binary_crossentropy','binary_crossentropy','binary_crossentropy', 'binary_crossentropy','binary_crossentropy', 'mae'],
+            #                       loss_weights=[1, 1, 1, 100, 100],
+            #                       optimizer=optimizer_g)
+            # 0.92-0.75 0.09-0.13
+            # 10 50 No 30-99
+
             # for batch_i, (imgs_A, fs, se, ge, si, ph, batch) in enumerate(self.data_loader.load_val_batch()):
             #     imgs_A = np.array(imgs_A)
             #     real_loss = self.discriminator.predict_on_batch(imgs_A)
@@ -473,21 +454,12 @@ class HarmonyGan():
 
             #
 
-
-
-
-            if np.mod(epoch+1,5)==0 or epoch<=9:
-                for batch_i, (imgs_A, fs, se, ma, batch) in enumerate(self.data_loader.load_val_batch()):
-                    # fs22 = np.concatenate([np.zeros((1, 1)), np.ones((1, 1))], axis=1)
-                    # se22 = np.concatenate([np.ones((1, 1)), np.zeros((1, 1))], axis=1)
-                    # ma22 = np.concatenate([np.zeros((1, 1)), np.ones((1, 1)), np.zeros((1, 1))], axis=1)
-                    # mloss22 = np.zeros((1, 80, 96, 80, 1))
+            if np.mod(epoch + 1, 5 ) == 0 or epoch<=4:
+                for batch_i, (imgs_A, batch) in enumerate(self.data_loader.load_val_batch()):
                     imgs_A = np.array(imgs_A)
                     d_loss = self.generator.predict_on_batch(imgs_A)
-                    #real_loss = self.discriminator.predict_on_batch(imgs_A)
-                    #fake_loss = self.combined.predict_on_batch(imgs_A)
                     print(batch)
-                    a2 = 'D:/MRIHAR/2test-har' + str(epoch + 1) + '/' + batch[23:len(batch) - 4] + '.mat'
+                    a2 = 'D:/MRIHAR/2test-har' + str(epoch + 1) + '/' + batch[22:len(batch) - 4] + '.mat'
                     print(a2)
                     scipy.io.savemat(a2, {'img': d_loss[0]})
 
